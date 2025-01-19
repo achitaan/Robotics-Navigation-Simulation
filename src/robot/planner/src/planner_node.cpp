@@ -101,8 +101,6 @@ bool PlannerNode::Astar(vector<CellIndex> path){
   std::unordered_set<CellIndex, CellIndex. CellIndexHash> prev_graph; 
   std::unordered_set<CellIndex, double. CellIndexHash> score; 
 
-
-
   // Set up starting node
   CellIndex start = CellIndex(pose_.postion.x, pose_.position.y);
   CellIndex dest = CellIndex(dest_.point.x, dest_.position.y);

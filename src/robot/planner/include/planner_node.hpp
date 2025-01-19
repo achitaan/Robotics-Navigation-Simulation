@@ -80,6 +80,19 @@ class PlannerNode : public rclcpp::Node {
     };
     
 
+    void mapCallBacker(nav_msgs::msg::OccupancyGrid &msg)
+    void goalCallBack(geometry_msgs::msg::PointStamped &msg)
+    void odomCallBack(nav_msgs::msg::Odometry &msg)
+    void timerCallBack()
+
+    void goalReached()
+    void pathPlan()
+    bool Astar(vector<CellIndex> path)
+    double manhattan_dist(CellIndex pose, CellIndex dest)
+    std::vector<CellIndex> neigh(CellIndex &cidx)
+    bool convertToMap(double x, double y, int &arrX, int &arrY)
+    int getCost(CellIndex &id)
+
 
 };
 
