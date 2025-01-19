@@ -1,211 +1,194 @@
 #include <algorithm>
 #include <unordered_map>
-
+#include <unordered_set>
+#include <cmath>
 #include "planner_node.hpp"
 
 PlannerNode::PlannerNode() : Node("planner"), planner_(robot::PlannerCore(this->get_logger())) {
+    // Create subscribers
+    map_sub = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
+        "/map", 10, std::bind(&PlannerNode::mapCallBack, this, std::placeholders::_1));
+    goal_sub = this->create_subscription<geometry_msgs::msg::PointStamped>(
+        "/goal_point", 10, std::bind(&PlannerNode::goalCallBack, this, std::placeholders::_1));
+    odom_sub = this->create_subscription<nav_msgs::msg::Odometry>(
+        "/odom/filter", 10, std::bind(&PlannerNode::odomCallBack, this, std::placeholders::_1));
 
-  // Create subscribers
-  map_sub = this->create_subscription<nav_msgs::msg::OccupancyGrid>('/map', 10, std::bind(PlannerNode::mapCallBack, this, std::placeholders::_1));
-  goal_sub = this->create_subscription<geometry_msgs::msg::PointStamped>('/goal_point', 10, std::bind(PlannerNode::goalCallBack, this, std::placeholders::_1));
-  odom_sub = this->create_subscription<nav_msgs::msg::Odometry>('/odom/filter', 10, std::bind(PlannerNode::odomCallBack, this, std::placeholders::_1));
+    // Create publisher
+    path_pub = this->create_publisher<nav_msgs::msg::Path>("/path", 10);
 
-  // Create Publisher
-  path_pub = this->create_publisher<nav_msgs::msg::Path>('/path', 10);
-
-  // Creater timer
-  timer_ = this->create_wall_timer(std::chrono::milliseconds(500), std::bind(&PlannerNode::timerCallBack, this));
+    // Create timer
+    timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(500),
+        std::bind(&PlannerNode::timerCallBack, this));
 }
 
-void PlannerNode::mapCallBacker(nav_msgs::msg::OccupancyGrid &msg){
-  grid_ = msg;
-  if (state_ == State::WAITING_FOR_ROBOT_TO_REACH_GOAL){
+void PlannerNode::mapCallBack(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
+    grid_ = msg;
+    if (state_ == State::WAITING_FOR_ROBOT_TO_REACH_GOAL) {
+        pathPlan();
+    }
+}
+
+void PlannerNode::goalCallBack(const geometry_msgs::msg::PointStamped::SharedPtr msg) {
+    dest_ = msg;
+    dest_received_ = true;
+    state_ = State::WAITING_FOR_ROBOT_TO_REACH_GOAL;
     pathPlan();
-  }
-  
 }
 
-void PlannerNode::goalCallBack(geometry_msgs::msg::PointStamped &msg){
-  dest_ = msg;
-  dest_recieved_ = true;
-  state_ = State::WAITING_FOR_ROBOT_TO_REACH_GOAL;
-  pathPlan();
+void PlannerNode::odomCallBack(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    pose_ = std::make_shared<geometry_msgs::msg::Pose>(msg->pose.pose);
 }
 
-void PlannerNode::odomCallBack(nav_msgs::msg::Odometry &msg){
-  pose_ = msg->pose.pose;
-}
-
-void PlannerNode::timerCallBack(){
-  if (state_ == State::WAITING_FOR_ROBOT_TO_REACH_GOAL){
-    if (goalReached()){
-      RCLCPP_INFO(this->get_logger(), "Goal Reacherd!!");
-      state_ = State::WAITING_FOR_GOAL;
+void PlannerNode::timerCallBack() {
+    if (state_ == State::WAITING_FOR_ROBOT_TO_REACH_GOAL) {
+        if (goalReached()) {
+            RCLCPP_INFO(this->get_logger(), "Goal Reached!");
+            state_ = State::WAITING_FOR_GOAL;
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Replanning due to timeout or progress...");
+            pathPlan();
+        }
     }
-    else{
-      RCLCPP_INFO(this->get_logger(), "Replanning due to timeout or progress...");
-      pathPlan();
-    }
-  }
 }
 
-void PlannerNode::goalReached(){
-  double dx = dest_.point.x - pose_.position.x, dy = dest_.point.y - pose_.position.y;
-  return std::sqrt(dx*dx _ dy*dy) < 0.5; // Threshold for reaching goal
+bool PlannerNode::goalReached() {
+    if (!pose_ || !dest_) return false;
+    double dx = dest_->point.x - pose_->position.x;
+    double dy = dest_->point.y - pose_->position.y;
+    return std::sqrt(dx * dx + dy * dy) < 0.5; // Threshold for reaching goal
 }
 
-void PlannerNode::pathPlan(){
-  if (!dest_recieved_ || grid_.data.empty()){
-    RCLCPP_INFO(this->get_logger(), "Cannot plan path: Missing map or goal");
-    return;
-  }
-  nav_msgs::msg::Path path;
-  path.header.stamp = this->get_clock()->now();
-  path.header.frame_id = "map";
-  
-  vector<CellIndex> path_nodes;
-  if (Astar(path_nodes)){
-    RCLCPP_INFO(this->get_logger(), "It aint cooked yet");
-
-    if (path->poses.size() > 0){
-      path->poses.clear();
+void PlannerNode::pathPlan() {
+    if (!dest_received_ || !grid_ || grid_->data.empty()) {
+        RCLCPP_INFO(this->get_logger(), "Cannot plan path: Missing map or goal");
+        return;
     }
 
-    for (auto &node : path_nodes){
-      geometry_msgs::msg::PoseStamped p;
+    nav_msgs::msg::Path path;
+    path.header.stamp = this->get_clock()->now();
+    path.header.frame_id = "map";
 
-      p.pose.position.x = node.index.x;
-      p.pose.position.y = node.index.y;
-      p.pose.position.w = node.index.1.0;
+    std::vector<CellIndex> path_nodes;
+    if (Astar(path_nodes)) {
+        RCLCPP_INFO(this->get_logger(), "Path found, publishing...");
+        path.poses.clear();
 
-
-
-      path->poses.push_back(p);
+        for (const auto &node : path_nodes) {
+            geometry_msgs::msg::PoseStamped p;
+            p.pose.position.x = node.x;
+            p.pose.position.y = node.y;
+            p.pose.orientation.w = 1.0;
+            path.poses.push_back(p);
+        }
+        path_pub->publish(path);
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Failed to find a path!");
     }
-    
-  }
-  
-  else{
-    RCLCPP_INFO(this->get_logger(), "Its cooked bruh");
-    return;
-  }
-  path.header.stamp = this->now();
-  path.header.frame_id = grid_->header.frame_id;
-  path_pub->publish(path);
 }
 
-bool PlannerNode::Astar(vector<CellIndex> path){
-    // Use A* 
-  priority_queue<Node, vetor<Node>, CompareF> q;
-  std::unordered_set<CellIndex, CellIndex. CellIndexHash> visited; 
-  std::unordered_set<CellIndex, CellIndex. CellIndexHash> prev_graph; 
-  std::unordered_set<CellIndex, double. CellIndexHash> score; 
+bool PlannerNode::Astar(std::vector<CellIndex> &path) {
+    if (!pose_ || !dest_) return false;
 
-  // Set up starting node
-  CellIndex start = CellIndex(pose_.postion.x, pose_.position.y);
-  CellIndex dest = CellIndex(dest_.point.x, dest_.position.y);
-  score[(start)] = 0;
+    CellIndex start(static_cast<int>(pose_->position.x), static_cast<int>(pose_->position.y));
+    CellIndex goal(static_cast<int>(dest_->point.x), static_cast<int>(dest_->point.y));
 
-  double manhattan_dist = manhattan_dist(start, dest);
-  q.insert(Node(start, 0, manhattan_dist))
+    auto manhattanDist = [](const CellIndex &a, const CellIndex &b) {
+        return std::abs(a.x - b.x) + std::abs(a.y - b.y);
+    };
 
-  while (!q.empty()){
-    Node curr = q.top(); q.pop();
+    std::priority_queue<Node, std::vector<Node>, CompareF> open_set;
+    std::unordered_set<CellIndex, CellIndexHash> closed_set;
+    std::unordered_map<CellIndex, CellIndex, CellIndexHash> came_from;
+    std::unordered_map<CellIndex, double, CellIndexHash> g_score;
 
-    if (curr.index==dest_.index){
-      // reconstruct the path
-      c = curr.index
-      while (c != start){
-        path.push_back(c);
-        c = prev_graph[c];
-      }
-      path.push_back(start);
-      reverse(path.begin(), path.end());
-      
+    g_score[start] = 0.0;
+    open_set.emplace(start, 0.0, manhattanDist(start, goal));
+
+    while (!open_set.empty()) {
+        Node current = open_set.top();
+        open_set.pop();
+
+        if (current.index == goal) {
+            CellIndex backtrack = goal;
+            while (backtrack != start) {
+                path.push_back(backtrack);
+                backtrack = came_from[backtrack];
+            }
+            path.push_back(start);
+            std::reverse(path.begin(), path.end());
+            return true;
+        }
+
+        closed_set.insert(current.index);
+
+        for (const auto &direction : dir_) {
+            CellIndex neighbor(current.index.x + direction[0], current.index.y + direction[1]);
+
+            if (neighbor.x < 0 || neighbor.x >= grid_->info.width ||
+                neighbor.y < 0 || neighbor.y >= grid_->info.height) {
+                continue;
+            }
+
+            int cost = getCost(neighbor);
+            if (cost > 80) continue; // High cost means obstacle
+
+            if (closed_set.find(neighbor) != closed_set.end()) continue;
+
+            double tentative_g_score = g_score[current.index] + 1.0;
+
+            if (g_score.find(neighbor) == g_score.end() || tentative_g_score < g_score[neighbor]) {
+                came_from[neighbor] = current.index;
+                g_score[neighbor] = tentative_g_score;
+                double h_score = manhattanDist(neighbor, goal);
+                open_set.emplace(neighbor, tentative_g_score, h_score);
+            }
+        }
     }
 
-    visited.insert((curr.index));
-
-    dir = neigh(curr.index);
-    for (auto &next : dir){
-      if (newIdx.x < 0 || newIdx.x >= grid_size || newIdx.y < 0 || newIdx.y >= grid_size)
-        continue;
-      
-      cost = get_cost(next);
-      
-      if (cost > 80){
-        // Check if the area is free and if it has not been visited
-        continue;
-      }
-
-      int newG = score[(cur.index)] + 1;
-      if (newG < score[(next)] || visited.find((next)) == visited.end()){
-        nextNode = Node(next, newG, manhattan_dist(next, dest));
-        score[(next)] = newG;
-
-        prev_graph[(next)] = curr.index;
-        visited.insert((next));
-        q.push(nextNode);
-      }
-    }
-  }
-  return false;
-}
-
-std::vector<CellIndex> PlannerNode::neigh(CellIndex &cidx){
-  std::vector<CellIndex> res;
-
-  for (auto &d : dir_){
-    int newY = cidx.y + d[0], newX = cidx.x + d[1];
-    res.push_back(CellIndex(newX, newY));
-  }
-  return res;
-}
-
-double PlannerNode::manhattan_dist(CellIndex pose, CellIndex dest){
-  return std::abs(dest.x - pose.x) + std::abs(dest.y - pose..y);
-}
-
-bool PlannerNode::convertToMap(double x, double y, int &arrX, int &arrY){
-  int global_h = global_map->info.height;
-  int global_w = global_map->info.width;
-  int local_h = local_map->info.height;
-  int local_w = local_map->info.width;
-
-  int origin_x = global_w * res / 2;
-  int origin_y = global_h * res / 2;
-
-  newX = static_cast<int>((x + origin_x)/res);
-  newY = static_cast<int>((y + origin_y)/res);
-
-  // Boundary check
-  if (newX < 0 || newX >= global_w || newY < 0 || newY >= global_h) 
     return false;
-  
-  arrX = newX;
-  arrY = newY;
-
-  return true;
 }
 
-int PlannerNode::getCost(CellIndex &id){
-  int arrX, arrY;
-
-  if (!convertToMap(arrX, arrY)) {
-      return 150;
-  }
-
-  int val = grid_->data[arrY * global_h + arrX];
-  if (val < 0)
-    return 150;
-
-  return static_cast<int>(val);
+double PlannerNode::manhattanDist(const CellIndex &pose, const CellIndex &dest) {
+    return std::abs(dest.x - pose.x) + std::abs(dest.y - pose.y);
 }
 
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<PlannerNode>());
-  rclcpp::shutdown();
-  return 0;
+std::vector<PlannerNode::CellIndex> PlannerNode::neigh(const CellIndex &cidx) {
+    std::vector<CellIndex> res;
+    for (const auto &d : dir_) {
+        int newX = cidx.x + d[0];
+        int newY = cidx.y + d[1];
+        res.emplace_back(newX, newY);
+    }
+    return res;
+}
+
+bool PlannerNode::convertToMap(double x, double y, int &arrX, int &arrY) {
+    int global_h = grid_->info.height;
+    int global_w = grid_->info.width;
+    double res = grid_->info.resolution;
+
+    int origin_x = static_cast<int>(grid_->info.origin.position.x);
+    int origin_y = static_cast<int>(grid_->info.origin.position.y);
+
+    arrX = static_cast<int>((x - origin_x) / res);
+    arrY = static_cast<int>((y - origin_y) / res);
+
+    return (arrX >= 0 && arrX < global_w && arrY >= 0 && arrY < global_h);
+}
+
+int PlannerNode::getCost(const CellIndex &id) {
+    int arrX, arrY;
+    if (!convertToMap(id.x, id.y, arrX, arrY)) return 150; // Out of bounds
+
+    int index = arrY * grid_->info.width + arrX;
+    int val = grid_->data[index];
+    return (val < 0) ? 150 : val;
+}
+
+int main(int argc, char **argv) {
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<PlannerNode>());
+    rclcpp::shutdown();
+    return 0;
 }
