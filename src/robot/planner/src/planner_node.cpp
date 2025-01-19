@@ -66,12 +66,31 @@ void PlannerNode::pathPlan(){
   vector<CellIndex> path_nodes;
   if (Astar(path_nodes)){
     RCLCPP_INFO(this->get_logger(), "It aint cooked yet");
+
+    if (path->poses.size() > 0){
+      path->poses.clear();
+    }
+
+    for (auto &node : path_nodes){
+      geometry_msgs::msg::PoseStamped p;
+
+      p.pose.position.x = node.index.x;
+      p.pose.position.y = node.index.y;
+      p.pose.position.w = node.index.1.0;
+
+
+
+      path->poses.push_back(p);
+    }
     
   }
   
   else{
     RCLCPP_INFO(this->get_logger(), "Its cooked bruh");
+    return;
   }
+  path.header.stamp = this->now();
+  path.header.frame_id = grid_->header.frame_id;
   path_pub->publish(path);
 }
 
@@ -149,31 +168,41 @@ double PlannerNode::manhattan_dist(CellIndex pose, CellIndex dest){
   return std::abs(dest.x - pose.x) + std::abs(dest.y - pose..y);
 }
 
-  int PlannerNode::getCost(CellIndex ){
-    int global_h = global_map->info.height;
-    int global_w = global_map->info.width;
-    int local_h = local_map->info.height;
-    int local_w = local_map->info.width;
+bool PlannerNode::convertToMap(double x, double y, int &arrX, int &arrY){
+  int global_h = global_map->info.height;
+  int global_w = global_map->info.width;
+  int local_h = local_map->info.height;
+  int local_w = local_map->info.width;
 
-    int origin_x = global_w * res / 2;
-    int origin_y = global_h * res / 2;
+  int origin_x = global_w * res / 2;
+  int origin_y = global_h * res / 2;
 
-    int arrX = static_cast<int>((newX + origin_x)/res);
-    int arrY = static_cast<int>((newY + origin_y)/res);
+  newX = static_cast<int>((x + origin_x)/res);
+  newY = static_cast<int>((y + origin_y)/res);
 
-    // Boundary check
-    if (arrX < 0 || arrX >= global_w || arrY < 0 || arrY >= global_h) {
-        return 150;
-    }
+  // Boundary check
+  if (newX < 0 || newX >= global_w || newY < 0 || newY >= global_h) 
+    return false;
+  
+  arrX = newX;
+  arrY = newY;
 
-    int val = grid_->data[arrY * global_h + arrX];
-    if (val < 0)
+  return true;
+}
+
+int PlannerNode::getCost(CellIndex &id){
+  int arrX, arrY;
+
+  if (!convertToMap(arrX, arrY)) {
       return 150;
-
-    return static_cast<int>(val);
   }
 
+  int val = grid_->data[arrY * global_h + arrX];
+  if (val < 0)
+    return 150;
 
+  return static_cast<int>(val);
+}
 
 int main(int argc, char ** argv)
 {
