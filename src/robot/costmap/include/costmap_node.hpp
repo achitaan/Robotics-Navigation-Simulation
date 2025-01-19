@@ -9,6 +9,7 @@
 
 // If you have a custom costmap_core.hpp:
 #include "costmap_core.hpp"
+#include "geometry_msgs/msg/pose.hpp"
 
 // Definition of GridData
 struct GridData {
@@ -28,6 +29,9 @@ private:
   // CostmapCore
   robot::CostmapCore costmap_;
 
+    nav_msgs::msg::OccupancyGrid message;
+  geometry_msgs::msg::Pose origin_;
+
   // Class members to store the occupancy grid and grid data
   int **occupancy_grid_;
   GridData grid_data_;
@@ -41,7 +45,7 @@ private:
 
   // Callback that processes the LaserScan and updates the occupancy grid
   // (Only takes a LaserScan now)
-  void lidarCallBack(const sensor_msgs::msg::LaserScan &msg);
+  void lidarCallBack(const sensor_msgs::msg::LaserScan::SharedPtr msg);
 
   // Inflate neighbors around an obstacle using BFS
   void inflateNeighbours(
@@ -51,6 +55,7 @@ private:
     double inflation_radius,
     int grid_size,
     double max_cost
+    
   );
 
   // Flatten the 2D occupancy grid into a 1D array

@@ -21,8 +21,7 @@ CostmapNode::CostmapNode()
   grid_data_.radius = 10;
   grid_data_.resolution = 0.1;
   grid_data_.center = {
-    grid_data_.size * grid_data_.resolution /2, // Convert coord to grid points
-    grid_data_.size * grid_data_.resolution /2
+    origin_.position.x, origin_.position.y
     };
 
   occupancy_grid_ = new int*[grid_data_.size];
@@ -39,20 +38,21 @@ CostmapNode::CostmapNode()
   costmap_pub = this->create_publisher<nav_msgs::msg::OccupancyGrid>("/costmap", 10);
 
   timer_ = this->create_wall_timer(
-    std::chrono::milliseconds(500), 
+    std::chrono::milliseconds(200), 
     std::bind(&CostmapNode::publishGrid, this)
   );
 }
 
-void CostmapNode::lidarCallBack(const sensor_msgs::msg::LaserScan &msg){
+void CostmapNode::lidarCallBack(const sensor_msgs::msg::LaserScan::SharedPtr msg){
+  message.header = msg->header;
   int center_x = grid_data_.center.first;
   int center_y = grid_data_.center.second;
 
   //RCLCPP_INFO(this->get_logger(), "nagle max = %f", msg.angle_max);
 
-  for (size_t i = 0; i < msg.ranges.size(); i++){
-    double range = msg.ranges[i];
-    double angle = msg.angle_min + i * msg.angle_increment;
+  for (size_t i = 0; i < msg->ranges.size(); i++){
+    double range = msg->ranges[i];
+    double angle = msg->angle_min + i * msg->angle_increment;
 
     if (range > grid_data_.size/2)
       continue;
@@ -74,7 +74,8 @@ void CostmapNode::lidarCallBack(const sensor_msgs::msg::LaserScan &msg){
 
     //RCLCPP_INFO(this->get_logger(), "Okay asoidjaslknd ");
 
-    if (grid_x >= 0 && grid_x < grid_data_.size && grid_y >= 0 && grid_y < grid_data_.size){
+    if ((grid_x >= 0) && (grid_x < grid_data_.size) && (grid_y >= 0) && (grid_y < grid_data_.size)){
+      
       //RCLCPP_INFO(this->get_logger(), "Position  (%f, %f)", x + center_x, y + center_y);
 
 
@@ -156,22 +157,22 @@ int* CostmapNode::flattenArray(int **arr, int grid_size){
   for (int i = 0; i < grid_size; i++){
     for (int j = 0; j < grid_size; j++){
       new_occupancy[i * grid_size + j] = arr[i][j];
+      arr[i][j] = 0;
     }
   }
   return new_occupancy;
 }
 
 void CostmapNode::publishGrid(){
-  nav_msgs::msg::OccupancyGrid message;
-
-  message.header.stamp = this->now();
-  message.header.frame_id = "map";
   message.info.width = grid_data_.size;
   message.info.height = grid_data_.size;
   message.info.resolution = grid_data_.resolution; 
+  message.info.origin.position.x = -1 * origin_.position.x*grid_data_.resolution;
+  message.info.origin.position.y = -1 * origin_.position.y*grid_data_.resolution;
+
+  message.data.assign(pow(grid_data_.size,2), -1);
 
   int *flat = CostmapNode::flattenArray(occupancy_grid_, grid_data_.size);
-
   // OccupancyGrid's 'data' is std::vector<int8_t>
   message.data.resize(grid_data_.size * grid_data_.size);
   for(int i = 0; i < grid_data_.size * grid_data_.size; i++){
@@ -183,6 +184,12 @@ void CostmapNode::publishGrid(){
     message.data[i] = static_cast<int8_t>(val);
   }
   delete [] flat; 
+
+  for (int i = 0; i < grid_data_.size; i++){
+    for (int j = 0; j < grid_data_.size; j++){
+      occupancy_grid_[i][j] = 0;
+    }
+  }
 
   costmap_pub->publish(message);
 }
