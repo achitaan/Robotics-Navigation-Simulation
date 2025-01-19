@@ -56,33 +56,35 @@ bool PlannerNode::goalReached() {
 }
 
 void PlannerNode::pathPlan() {
-    if (!dest_received_ || !grid_ || grid_->data.empty()) {
-        RCLCPP_INFO(this->get_logger(), "Cannot plan path: Missing map or goal");
-        return;
+  if (!dest_received_ || !grid_ || grid_->data.empty()) {
+    RCLCPP_INFO(this->get_logger(), "Cannot plan path: Missing map or goal");
+    return;
+  }
+
+  nav_msgs::msg::Path path;
+  path.header.stamp = this->get_clock()->now();
+  path.header.frame_id = "map";
+
+  std::vector<CellIndex> path_nodes;
+  if (Astar(path_nodes)) {
+      path.poses.clear();
+
+    for (const auto &node : path_nodes) {
+      geometry_msgs::msg::PoseStamped p;
+      p.pose.position.x = node.x;
+      p.pose.position.y = node.y;
+      p.pose.orientation.w = 1.0;
+
+      path.poses.push_back(p);
     }
+  } 
 
-    nav_msgs::msg::Path path;
-    path.header.stamp = this->get_clock()->now();
-    path.header.frame_id = "map";
+  else {
+    RCLCPP_INFO(this->get_logger(), "Path planning failed.");
+    return;
+  }
 
-    std::vector<CellIndex> path_nodes;
-    if (Astar(path_nodes)) {
-        path.poses.clear();
-
-        for (const auto &node : path_nodes) {
-            geometry_msgs::msg::PoseStamped p;
-            p.pose.position.x = node.x;
-            p.pose.position.y = node.y;
-            p.pose.orientation.w = 1.0;
-
-            path.poses.push_back(p);
-        }
-    } else {
-        RCLCPP_INFO(this->get_logger(), "Path planning failed.");
-        return;
-    }
-
-    path_pub->publish(path);
+  path_pub->publish(path);
 }
 
 bool PlannerNode::Astar(std::vector<CellIndex> &path) {

@@ -85,6 +85,8 @@ void MapMemoryNode::odomCallBack(const nav_msgs::msg::Odometry &msg) {
 void MapMemoryNode::updateMap() {
     if (update_map_ && update_map_state_) {
         linearFusion();
+        global_map.header.stamp = this->now();
+        global_map.header.frame_id = "sim_world";
         map_pub->publish(*global_map);
         update_map_ = false;
     }
